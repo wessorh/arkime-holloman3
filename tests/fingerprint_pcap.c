@@ -270,7 +270,7 @@ int main(int argc, char **argv) {
     /* Print results for HTTP response flows with bodies */
     printf("%-15s %-6s %-15s %-6s %-7s %-8s %-36s %s\n",
            "Server IP", "Port", "Client IP", "Port",
-           "Status", "BodyLen", "Holloman3 (h.<32hex>)", "Content-Type");
+           "Status", "BodyLen", "Holloman3 (<c>.<32hex>)", "Content-Type");
     printf("%.*s\n", 150,
            "--------------------------------------------------------------------------------------------------------------------------------------------------------");
 
