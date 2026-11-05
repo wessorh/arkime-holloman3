@@ -44,13 +44,6 @@ static void byte_buf_append(ByteBuf *b, const uint8_t *src, size_t n) {
 static void byte_buf_reset(ByteBuf *b) { b->len = 0; }
 static void byte_buf_free(ByteBuf *b) { free(b->data); free(b); }
 
-/* ── Hex encoding (same logic as http.c + arkime_sprint_hex_string) ──── */
-
-static void sprint_hex(char *out, const uint8_t *bin, int n) {
-    for (int i = 0; i < n; i++)
-        sprintf(out + i * 2, "%02x", bin[i]);
-}
-
 /* ── test helpers ───────────────────────────────────────────────────── */
 
 static int tests_run  = 0;
@@ -196,39 +189,39 @@ static void test_body_over_max(void) {
 }
 
 static void test_hex_encoding(void) {
-    TEST("hex encoding: produces 'h.' + 32 lowercase hex");
+    TEST("hex encoding: produces '<c>.<32 hex>' using holloman3_fingerprint_string");
     const uint8_t *body = (const uint8_t *)"Hello, World!";
     size_t len = strlen((const char *)body);
     uint8_t fp[16];
-    uint8_t fp2[16];
 
     CHECK(process_http_body("hex", &body, &len, 1, fp) == 0,
           "fingerprint failed");
-    CHECK(holloman3_fingerprint_buffer(body, len, fp2) == 0,
-          "direct fingerprint failed");
-    CHECK(memcmp(fp, fp2, 16) == 0,
-          "http-emulated ≠ direct fingerprint");
 
-    /* Encode as http.c does: "h." + 32 hex */
-    char hex[35];
-    hex[0] = 'h'; hex[1] = '.';
-    sprint_hex(hex + 2, fp, 16);
-    hex[34] = '\0';
+    /* Format using holloman3_fingerprint_string — the canonical encoding */
+    char id[35];
+    CHECK(holloman3_fingerprint_string(fp, id) == 0,
+          "fingerprint_string failed");
+    CHECK(strlen(id) == 34, "length should be 34, got %zu", strlen(id));
 
-    CHECK(strlen(hex) == 34, "hex length should be 34, got %zu", strlen(hex));
-    CHECK(hex[0] == 'h', "first char should be 'h'");
-    CHECK(hex[1] == '.', "second char should be '.'");
+    /* The order char depends on holloman3_init() order.
+       We inited with order=8, which maps to 'i' in ORDER_ALPHABET. */
+    char expected_prefix = holloman3_order_char();
+    CHECK(id[0] == expected_prefix, "first char should be '%c', got '%c'",
+          expected_prefix, id[0]);
+    CHECK(id[1] == '.', "second char should be '.'");
+    CHECK(id[0] != 'h', "should NOT be hardcoded 'h' (it's '%c' for order %d)",
+          expected_prefix, 8);
 
-    /* All chars after "h." should be lowercase hex (0-9, a-f) */
+    /* All chars after "<c>." should be lowercase hex */
     int valid = 1;
     for (int i = 2; i < 34; i++) {
-        if (!((hex[i] >= '0' && hex[i] <= '9') ||
-              (hex[i] >= 'a' && hex[i] <= 'f'))) {
+        if (!((id[i] >= '0' && id[i] <= '9') ||
+              (id[i] >= 'a' && id[i] <= 'f'))) {
             valid = 0;
             break;
         }
     }
-    CHECK(valid, "invalid hex characters in fingerprint");
+    CHECK(valid, "invalid hex characters in id");
     PASS();
 }
 

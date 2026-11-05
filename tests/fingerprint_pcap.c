@@ -297,13 +297,9 @@ int main(int argc, char **argv) {
         /* Compute holloman3 fingerprint of the body */
         uint8_t fp[16];
         if (holloman3_fingerprint_buffer(f->body + body_start, body_len, fp) == 0) {
-            /* Format as h.<32 hex> */
-            char hex[35];
-            hex[0] = 'h'; hex[1] = '.';
-            for (int j = 0; j < 16; j++)
-                sprintf(hex + 2 + j*2, "%02x", fp[j]);
-            hex[34] = '\0';
-            printf("%-36s ", hex);
+            char id[35];
+            holloman3_fingerprint_string(fp, id);
+            printf("%-36s ", id);
         } else {
             printf("%-36s ", "ERR");
         }

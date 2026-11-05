@@ -75,12 +75,11 @@ LOCAL void holloman_hp_omc(ArkimeSession_t *session, http_parser *hp)
     uint8_t fp[16];
     if (holloman3_fingerprint_buffer(hd->body[dir]->data,
                                       hd->body[dir]->len, fp) == 0) {
-        char hex[35];   /* "h." + 32 hex + null */
-        hex[0] = 'h'; hex[1] = '.';
-        arkime_sprint_hex_string(hex + 2, fp, 16);
+        char id[35];   /* <c>.<32hex> + null */
+        holloman3_fingerprint_string(fp, id);
 
         arkime_field_string_add(holloman_field[dir], session,
-                                hex, 34, TRUE);
+                                id, 34, TRUE);
     }
 
     g_byte_array_set_size(hd->body[dir], 0);
