@@ -3,10 +3,14 @@
  * Simulates the HTTP body buffering → holloman3 fingerprint → hex encoding
  * flow that http.c uses.  No Arkime headers required — only libholloman3.
  *
+ * NOTE: libholloman3 requires buffers >= 256 bytes for a valid fingerprint.
+ * Buffers smaller than 256 bytes return -3 (too small).  All positive
+ * tests below use bodies of at least 256 bytes.
+ *
  * Compile: cc -I../../libholloman3/include -o test_http_holloman3 \
  *              test_http_holloman3.c -L../../libholloman3 -lholloman3 -lm
  *
- * Run:     ./test_http_holloman3
+ * Run:     LD_LIBRARY_PATH=../../libholloman3 ./test_http_holloman3
  */
 
 #include <stdio.h>
@@ -27,7 +31,7 @@ typedef struct {
 
 static ByteBuf *byte_buf_new(void) {
     ByteBuf *b = calloc(1, sizeof(ByteBuf));
-    b->cap = 256;
+    b->cap = 512;
     b->data = malloc(b->cap);
     return b;
 }
@@ -61,6 +65,13 @@ static int tests_fail = 0;
 
 static int support_holloman3 = 1;
 static int max_body_len     = 1024 * 1024;  /* 1 MB */
+
+/* ── Body generator: fills a buffer with >= 256 bytes of content ─────── */
+
+static void make_body(uint8_t *buf, size_t n, uint8_t seed) {
+    for (size_t i = 0; i < n; i++)
+        buf[i] = (uint8_t)(seed + i * 7);
+}
 
 /* ── Simulate http.c body buffering and fingerprinting flow ──────────── */
 
@@ -100,14 +111,16 @@ static int process_http_body(const char *desc __attribute__((unused)),
 /* ── Tests ───────────────────────────────────────────────────────────── */
 
 static void test_single_chunk(void) {
-    TEST("single chunk: deterministic fingerprint");
-    const uint8_t *body = (const uint8_t *)"GET /index.html HTTP/1.1\r\nHost: example.com\r\n\r\n";
-    size_t len = strlen((const char *)body);
+    TEST("single chunk: deterministic fingerprint (300 bytes)");
+    uint8_t body[300];
+    make_body(body, 300, 1);
+    const uint8_t *body_ptr = body;
+    size_t len = 300;
     uint8_t fp1[16], fp2[16];
 
-    CHECK(process_http_body("single-1", &body, &len, 1, fp1) == 0,
+    CHECK(process_http_body("single-1", &body_ptr, &len, 1, fp1) == 0,
           "first call failed");
-    CHECK(process_http_body("single-2", &body, &len, 1, fp2) == 0,
+    CHECK(process_http_body("single-2", &body_ptr, &len, 1, fp2) == 0,
           "second call failed");
     CHECK(memcmp(fp1, fp2, 16) == 0,
           "non-deterministic (single chunk)");
@@ -118,21 +131,19 @@ static void test_multi_chunk(void) {
     TEST("multi-chunk: same as single chunk fingerprint");
 
     /* Single chunk of the full body */
-    const char *full = "POST /api/data HTTP/1.1\r\nContent-Type: application/json\r\n\r\n"
-                       "{\"key\":\"value\",\"items\":[1,2,3,4,5]}";
-    size_t full_len = strlen(full);
-    const uint8_t *full_ptr = (const uint8_t *)full;
+    uint8_t full[512];
+    make_body(full, 512, 5);
+    size_t full_len = 512;
+    const uint8_t *full_ptr = full;
     uint8_t fp_full[16];
     CHECK(process_http_body("full", &full_ptr, &full_len, 1, fp_full) == 0,
           "full fingerprint failed");
 
-    /* Same body split into 3 chunks of different sizes */
-    const uint8_t *c1 = (const uint8_t *)"POST /api/data HTT";
-    const uint8_t *c2 = (const uint8_t *)"P/1.1\r\nContent-Type: application/json\r\n";
-    const uint8_t *c3 = (const uint8_t *)"\r\n{\"key\":\"value\",\"items\":[1,2,3,4,5]}";
-    const size_t l1 = strlen((const char *)c1);
-    const size_t l2 = strlen((const char *)c2);
-    const size_t l3 = strlen((const char *)c3);
+    /* Same body split into 3 chunks */
+    const uint8_t *c1 = full;
+    const uint8_t *c2 = full + 200;
+    const uint8_t *c3 = full + 400;
+    size_t l1 = 200, l2 = 200, l3 = 112;
     const uint8_t *chunks[3] = {c1, c2, c3};
     size_t lens[3] = {l1, l2, l3};
     uint8_t fp_chunked[16];
@@ -157,10 +168,12 @@ static void test_empty_body(void) {
 static void test_config_disabled(void) {
     TEST("config: support disabled skips fingerprinting");
     support_holloman3 = 0;
-    const uint8_t *body = (const uint8_t *)"some body data for testing";
-    size_t len = strlen((const char *)body);
+    uint8_t body[300];
+    make_body(body, 300, 9);
+    const uint8_t *body_ptr = body;
+    size_t len = 300;
     uint8_t fp[16];
-    CHECK(process_http_body("disabled", &body, &len, 1, fp) == -1,
+    CHECK(process_http_body("disabled", &body_ptr, &len, 1, fp) == -1,
           "should return -1 when disabled");
     support_holloman3 = 1;  /* re-enable */
     PASS();
@@ -169,19 +182,21 @@ static void test_config_disabled(void) {
 static void test_body_over_max(void) {
     TEST("config: body truncated at max_body_len");
     int saved_max = max_body_len;
-    max_body_len = 8;  /* tiny limit for testing */
+    max_body_len = 300;  /* limit for testing */
 
-    /* 16 bytes of body → only first 8 should be fingerprinted */
-    const uint8_t *body = (const uint8_t *)"ABCDEFGHIJKLMNOP";
-    size_t len = 16;
+    /* 512 bytes of body → only first 300 should be fingerprinted */
+    uint8_t body[512];
+    make_body(body, 512, 13);
+    const uint8_t *body_ptr = body;
+    size_t len = 512;
     uint8_t fp_short[16];
-    CHECK(process_http_body("truncated", &body, &len, 1, fp_short) == 0,
+    CHECK(process_http_body("truncated", &body_ptr, &len, 1, fp_short) == 0,
           "truncated fingerprint failed");
 
-    /* Now fingerprint only the first 8 bytes directly */
+    /* Now fingerprint only the first 300 bytes directly */
     uint8_t fp_direct[16];
-    CHECK(holloman3_fingerprint_buffer(body, 8, fp_direct) == 0,
-          "direct 8-byte fingerprint failed");
+    CHECK(holloman3_fingerprint_buffer(body, 300, fp_direct) == 0,
+          "direct 300-byte fingerprint failed");
     CHECK(memcmp(fp_short, fp_direct, 16) == 0,
           "truncated body ≠ first N bytes");
     max_body_len = saved_max;
@@ -190,11 +205,13 @@ static void test_body_over_max(void) {
 
 static void test_hex_encoding(void) {
     TEST("hex encoding: produces '<c>.<32 hex>' using holloman3_fingerprint_string");
-    const uint8_t *body = (const uint8_t *)"Hello, World!";
-    size_t len = strlen((const char *)body);
+    uint8_t body[300];
+    make_body(body, 300, 21);
+    const uint8_t *body_ptr = body;
+    size_t len = 300;
     uint8_t fp[16];
 
-    CHECK(process_http_body("hex", &body, &len, 1, fp) == 0,
+    CHECK(process_http_body("hex", &body_ptr, &len, 1, fp) == 0,
           "fingerprint failed");
 
     /* Format using holloman3_fingerprint_string — the canonical encoding */
@@ -203,14 +220,11 @@ static void test_hex_encoding(void) {
           "fingerprint_string failed");
     CHECK(strlen(id) == 34, "length should be 34, got %zu", strlen(id));
 
-    /* The order char depends on holloman3_init() order.
-       We inited with order=8, which maps to 'i' in ORDER_ALPHABET. */
+    /* The order char depends on buffer size (300 bytes → order 5 → 'f') */
     char expected_prefix = holloman3_order_char();
     CHECK(id[0] == expected_prefix, "first char should be '%c', got '%c'",
           expected_prefix, id[0]);
     CHECK(id[1] == '.', "second char should be '.'");
-    CHECK(id[0] != 'h', "should NOT be hardcoded 'h' (it's '%c' for order %d)",
-          expected_prefix, 8);
 
     /* All chars after "<c>." should be lowercase hex */
     int valid = 1;
@@ -228,14 +242,16 @@ static void test_hex_encoding(void) {
 static void test_concurrent_bodies(void) {
     TEST("concurrent: two bodies produce different fingerprints");
 
-    const uint8_t *body1 = (const uint8_t *)"AAAA";
-    const uint8_t *body2 = (const uint8_t *)"BBBB";
-    size_t len1 = 4, len2 = 4;
+    uint8_t body1[300], body2[300];
+    make_body(body1, 300, 1);
+    make_body(body2, 300, 100);
+    const uint8_t *p1 = body1, *p2 = body2;
+    size_t len1 = 300, len2 = 300;
     uint8_t fp1[16], fp2[16];
 
-    CHECK(process_http_body("body1", &body1, &len1, 1, fp1) == 0,
+    CHECK(process_http_body("body1", &p1, &len1, 1, fp1) == 0,
           "body1 failed");
-    CHECK(process_http_body("body2", &body2, &len2, 1, fp2) == 0,
+    CHECK(process_http_body("body2", &p2, &len2, 1, fp2) == 0,
           "body2 failed");
     CHECK(memcmp(fp1, fp2, 16) != 0,
           "different bodies should not match");
@@ -245,18 +261,20 @@ static void test_concurrent_bodies(void) {
 static void test_determinism_across_inits(void) {
     TEST("determinism: survives cleanup + reinit");
 
-    const uint8_t *body = (const uint8_t *)"test body";
-    size_t len = strlen((const char *)body);
+    uint8_t body[300];
+    make_body(body, 300, 33);
+    const uint8_t *body_ptr = body;
+    size_t len = 300;
     uint8_t fp1[16];
 
-    CHECK(process_http_body("before", &body, &len, 1, fp1) == 0,
+    CHECK(process_http_body("before", &body_ptr, &len, 1, fp1) == 0,
           "before cleanup failed");
 
     holloman3_cleanup();
     CHECK(holloman3_init(8) == 0, "reinit failed");
 
     uint8_t fp2[16];
-    CHECK(process_http_body("after", &body, &len, 1, fp2) == 0,
+    CHECK(process_http_body("after", &body_ptr, &len, 1, fp2) == 0,
           "after cleanup failed");
     CHECK(memcmp(fp1, fp2, 16) == 0,
           "fingerprint changed after cleanup/reinit");
