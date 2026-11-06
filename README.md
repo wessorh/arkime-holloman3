@@ -150,12 +150,19 @@ python3 -c "
 a = '6b718382030b717a0000060700000000'
 b = '6b718382030b717b0000060700000000'
 dist = sum(bin(int(x,16)^int(y,16)).count('1') for x,y in zip(a,b))
-print(f'Hamming distance: {dist} bits')  # small = structurally similar
+print(f'Hamming distance: {dist} bits')  # 1-3 bits = nearly identical
 "
 ```
 
+### Hamming distance reference
+
+| Distance | Interpretation |
+|---|---|
+| 0 bits | Byte-exact structural match |
+| 1–3 bits | Nearly identical |
+
 Use these fingerprints to:
-- **Cluster malware families**: samples with Hamming distance < 32 bits are likely same family
+- **Cluster malware families**: samples with Hamming distance ≤ 3 bits are likely same family
 - **Detect new variants**: fingerprint new PCAPs, compare against known-bad fingerprint database
 - **Track campaign evolution**: monitor how fingerprints shift as malware is re-packed
 
